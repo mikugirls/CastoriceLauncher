@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Buffers.Binary;
+using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using Microsoft.UI.Xaml;
@@ -13,11 +14,12 @@ namespace LauncherApp.Views;
 
 public partial class MainPage : Page
 {
-    private const string PatchDirectory = @"D:\Projects\CastoriceLauncher\Patch";
-    private const string ServerDirectory = @"D:\Projects\CastoriceLauncher\Server";
     private static readonly string[] SupportedLanguages = ["en-US", "zh-CN", "zh-TW"];
     private static readonly string[] SupportedGameLanguages = ["cn", "en", "kr", "jp"];
     private readonly ResourceLoader stringResources = new();
+    private readonly string packageRootDirectory;
+    private readonly string patchDirectory;
+    private readonly string serverDirectory;
 
     private LauncherSettings settings = new();
     private Process? serverProcess;
@@ -25,6 +27,9 @@ public partial class MainPage : Page
     public MainPage()
     {
         InitializeComponent();
+        packageRootDirectory = ResolvePackageRootDirectory();
+        patchDirectory = Path.Combine(packageRootDirectory, "Patch");
+        serverDirectory = Path.Combine(packageRootDirectory, "Server");
         settings = LauncherSettings.Load();
         settings.ApplyDefaults();
         settings.Save();
@@ -122,8 +127,8 @@ public partial class MainPage : Page
     {
         try
         {
-            _ = await Launcher.LaunchFolderPathAsync(PatchDirectory);
-            UpdateStatus(Rf("UiOpenPatchOkFormat", PatchDirectory));
+            _ = await Launcher.LaunchFolderPathAsync(patchDirectory);
+            UpdateStatus(Rf("UiOpenPatchOkFormat", patchDirectory));
         }
         catch (Exception ex)
         {
@@ -165,20 +170,126 @@ public partial class MainPage : Page
 
     private async Task<string?> PickGameDirectoryPathAsync()
     {
-        var picker = new FolderPicker();
+        var picker = new FileOpenPicker();
         InitializeWithWindow.Initialize(picker, GetWindowHandle());
         picker.SuggestedStartLocation = PickerLocationId.DocumentsLibrary;
-        picker.FileTypeFilter.Add("*");
+        picker.FileTypeFilter.Add(".exe");
 
-        var folder = await picker.PickSingleFolderAsync();
-        return folder?.Path;
+        var file = await picker.PickSingleFileAsync();
+        if (file == null || string.IsNullOrWhiteSpace(file.Path))
+        {
+            return null;
+        }
+
+        return Path.GetDirectoryName(file.Path);
+    }
+
+    private async Task<string?> PickZipPackagePathAsync()
+    {
+        var picker = new FileOpenPicker();
+        InitializeWithWindow.Initialize(picker, GetWindowHandle());
+        picker.SuggestedStartLocation = PickerLocationId.Downloads;
+        picker.FileTypeFilter.Add(".zip");
+        var file = await picker.PickSingleFileAsync();
+        return file?.Path;
+    }
+
+    private async Task UpdatePatchServerFromZipAsync()
+    {
+        try
+        {
+            var zipPath = await PickZipPackagePathAsync();
+            if (string.IsNullOrWhiteSpace(zipPath))
+            {
+                UpdateStatus(R("UiUpdateFromZipCanceled"));
+                return;
+            }
+
+            UpdateStatus(Rf("UiUpdateFromZipApplyingFormat", zipPath));
+
+            await Task.Run(() =>
+            {
+                var tempRoot = Path.Combine(Path.GetTempPath(), "CastoriceLauncher", Guid.NewGuid().ToString("N"));
+                var tempPatch = Path.Combine(tempRoot, "Patch");
+                var tempServer = Path.Combine(tempRoot, "Server");
+                var extractedPatch = false;
+                var extractedServer = false;
+
+                try
+                {
+                    Directory.CreateDirectory(tempPatch);
+                    Directory.CreateDirectory(tempServer);
+
+                    using var archive = ZipFile.OpenRead(zipPath);
+                    foreach (var entry in archive.Entries)
+                    {
+                        if (TryMapZipEntry(entry.FullName, out var folderName, out var relativePath))
+                        {
+                            var targetRoot = folderName.Equals("Patch", StringComparison.OrdinalIgnoreCase) ? tempPatch : tempServer;
+                            extractedPatch |= folderName.Equals("Patch", StringComparison.OrdinalIgnoreCase);
+                            extractedServer |= folderName.Equals("Server", StringComparison.OrdinalIgnoreCase);
+
+                            if (string.IsNullOrWhiteSpace(relativePath))
+                            {
+                                continue;
+                            }
+
+                            var targetPath = Path.GetFullPath(Path.Combine(targetRoot, relativePath));
+                            if (!targetPath.StartsWith(targetRoot, StringComparison.OrdinalIgnoreCase))
+                            {
+                                throw new InvalidDataException("Invalid zip entry path.");
+                            }
+
+                            var targetDir = Path.GetDirectoryName(targetPath);
+                            if (!string.IsNullOrWhiteSpace(targetDir))
+                            {
+                                Directory.CreateDirectory(targetDir);
+                            }
+
+                            if (!entry.FullName.EndsWith("/", StringComparison.Ordinal))
+                            {
+                                entry.ExtractToFile(targetPath, overwrite: true);
+                            }
+                        }
+                    }
+
+                    if (!extractedPatch && !extractedServer)
+                    {
+                        throw new InvalidDataException(R("UiUpdateFromZipNoPatchServer"));
+                    }
+
+                    if (extractedPatch)
+                    {
+                        ReplaceDirectory(patchDirectory, tempPatch);
+                    }
+
+                    if (extractedServer)
+                    {
+                        ReplaceDirectory(serverDirectory, tempServer);
+                    }
+                }
+                finally
+                {
+                    if (Directory.Exists(tempRoot))
+                    {
+                        Directory.Delete(tempRoot, recursive: true);
+                    }
+                }
+            });
+
+            UpdateStatus(R("UiUpdateFromZipDone"));
+        }
+        catch (Exception ex)
+        {
+            UpdateStatus(Rf("UiUpdateFromZipFailedFormat", ex.Message));
+        }
     }
 
     private async Task LaunchWithLocalPatchAsync()
     {
-        if (!Directory.Exists(PatchDirectory))
+        if (!Directory.Exists(patchDirectory))
         {
-            UpdateStatus(Rf("UiPatchDirMissingFormat", PatchDirectory));
+            UpdateStatus(Rf("UiPatchDirMissingFormat", patchDirectory));
             return;
         }
 
@@ -215,21 +326,21 @@ public partial class MainPage : Page
                 return Rf("UiServerAlreadyRunningFormat", serverProcess.ProcessName, serverProcess.Id);
             }
 
-            if (!Directory.Exists(ServerDirectory))
+            if (!Directory.Exists(serverDirectory))
             {
-                return Rf("UiServerDirMissingFormat", ServerDirectory);
+                return Rf("UiServerDirMissingFormat", serverDirectory);
             }
 
-            var serverExe = FindServerExe(ServerDirectory);
+            var serverExe = FindServerExe(serverDirectory);
             if (string.IsNullOrWhiteSpace(serverExe))
             {
-                return Rf("UiServerExeMissingInDirFormat", ServerDirectory);
+                return Rf("UiServerExeMissingInDirFormat", serverDirectory);
             }
 
             var startInfo = new ProcessStartInfo
             {
                 FileName = serverExe,
-                WorkingDirectory = Path.GetDirectoryName(serverExe) ?? ServerDirectory,
+                WorkingDirectory = Path.GetDirectoryName(serverExe) ?? serverDirectory,
                 UseShellExecute = true,
             };
 
@@ -256,7 +367,7 @@ public partial class MainPage : Page
             return launcherInGame;
         }
 
-        var launcherFromPatch = Path.Combine(PatchDirectory, "launcher.exe");
+        var launcherFromPatch = Path.Combine(patchDirectory, "launcher.exe");
         if (!File.Exists(launcherFromPatch))
         {
             return null;
@@ -288,6 +399,89 @@ public partial class MainPage : Page
         };
 
         Process.Start(psi);
+    }
+
+    private static string ResolvePackageRootDirectory()
+    {
+        var baseDir = Path.GetFullPath(AppContext.BaseDirectory);
+        var parent = Path.GetFullPath(Path.Combine(baseDir, ".."));
+
+        var rootCandidates = new[]
+        {
+            parent,
+            baseDir,
+        };
+
+        foreach (var candidate in rootCandidates)
+        {
+            var patch = Path.Combine(candidate, "Patch");
+            var server = Path.Combine(candidate, "Server");
+            if (Directory.Exists(patch) || Directory.Exists(server))
+            {
+                return candidate;
+            }
+        }
+
+        return parent;
+    }
+
+    private static bool TryMapZipEntry(string fullName, out string folderName, out string relativePath)
+    {
+        folderName = string.Empty;
+        relativePath = string.Empty;
+
+        var normalized = fullName.Replace('\\', '/').TrimStart('/');
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return false;
+        }
+
+        var parts = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < parts.Length; i++)
+        {
+            if (parts[i].Equals("Patch", StringComparison.OrdinalIgnoreCase) || parts[i].Equals("Server", StringComparison.OrdinalIgnoreCase))
+            {
+                folderName = parts[i];
+                relativePath = i + 1 < parts.Length
+                    ? Path.Combine(parts.Skip(i + 1).ToArray())
+                    : string.Empty;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void ReplaceDirectory(string targetDir, string sourceDir)
+    {
+        if (!Directory.Exists(sourceDir))
+        {
+            return;
+        }
+
+        if (Directory.Exists(targetDir))
+        {
+            Directory.Delete(targetDir, recursive: true);
+        }
+
+        CopyDirectory(sourceDir, targetDir);
+    }
+
+    private static void CopyDirectory(string sourceDir, string destinationDir)
+    {
+        Directory.CreateDirectory(destinationDir);
+
+        foreach (var filePath in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
+        {
+            var relativePath = Path.GetRelativePath(sourceDir, filePath);
+            var destPath = Path.Combine(destinationDir, relativePath);
+            var parent = Path.GetDirectoryName(destPath);
+            if (!string.IsNullOrWhiteSpace(parent))
+            {
+                Directory.CreateDirectory(parent);
+            }
+            File.Copy(filePath, destPath, overwrite: true);
+        }
     }
 
     private static nint GetWindowHandle()
@@ -405,19 +599,26 @@ public partial class MainPage : Page
         var openPatchButton = new Button { Content = R("UiOpenPatchDir"), HorizontalAlignment = HorizontalAlignment.Left };
         openPatchButton.Click += async (_, _) =>
         {
-            try { _ = await Launcher.LaunchFolderPathAsync(PatchDirectory); } catch { }
+            try { _ = await Launcher.LaunchFolderPathAsync(patchDirectory); } catch { }
         };
 
         var openServerButton = new Button { Content = R("UiOpenServerDir"), HorizontalAlignment = HorizontalAlignment.Left };
         openServerButton.Click += async (_, _) =>
         {
-            try { _ = await Launcher.LaunchFolderPathAsync(ServerDirectory); } catch { }
+            try { _ = await Launcher.LaunchFolderPathAsync(serverDirectory); } catch { }
+        };
+
+        var updateFromZipButton = new Button { Content = R("UiUpdatePatchServerFromZip"), HorizontalAlignment = HorizontalAlignment.Left };
+        updateFromZipButton.Click += async (_, _) =>
+        {
+            await UpdatePatchServerFromZipAsync();
         };
 
         var panel = new StackPanel { Spacing = 8 };
         panel.Children.Add(setPathButton);
         panel.Children.Add(openPatchButton);
         panel.Children.Add(openServerButton);
+        panel.Children.Add(updateFromZipButton);
 
         var dialog = new ContentDialog
         {

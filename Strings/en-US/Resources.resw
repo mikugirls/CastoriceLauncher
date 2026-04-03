@@ -585,4 +585,22 @@
   <data name="UiPluginHdiffFailedFormat" xml:space="preserve">
     <value>HDiff patch failed: {0}</value>
   </data>
+  <data name="UiUpdatePatchServerFromZip" xml:space="preserve">
+    <value>Update Patch/Server from ZIP</value>
+  </data>
+  <data name="UiUpdateFromZipCanceled" xml:space="preserve">
+    <value>ZIP selection canceled.</value>
+  </data>
+  <data name="UiUpdateFromZipApplyingFormat" xml:space="preserve">
+    <value>Applying update from ZIP: {0}</value>
+  </data>
+  <data name="UiUpdateFromZipNoPatchServer" xml:space="preserve">
+    <value>No Patch/Server content found in ZIP.</value>
+  </data>
+  <data name="UiUpdateFromZipDone" xml:space="preserve">
+    <value>Patch/Server updated from ZIP.</value>
+  </data>
+  <data name="UiUpdateFromZipFailedFormat" xml:space="preserve">
+    <value>ZIP update failed: {0}</value>
+  </data>
 </root>

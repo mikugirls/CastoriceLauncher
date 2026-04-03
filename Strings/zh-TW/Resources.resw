@@ -585,4 +585,22 @@
   <data name="UiPluginHdiffFailedFormat" xml:space="preserve">
     <value>HDiff 補丁失敗：{0}</value>
   </data>
+  <data name="UiUpdatePatchServerFromZip" xml:space="preserve">
+    <value>從 ZIP 更新補丁/伺服器</value>
+  </data>
+  <data name="UiUpdateFromZipCanceled" xml:space="preserve">
+    <value>已取消選擇 ZIP 檔案。</value>
+  </data>
+  <data name="UiUpdateFromZipApplyingFormat" xml:space="preserve">
+    <value>正在從 ZIP 更新：{0}</value>
+  </data>
+  <data name="UiUpdateFromZipNoPatchServer" xml:space="preserve">
+    <value>ZIP 中找不到 Patch/Server 內容。</value>
+  </data>
+  <data name="UiUpdateFromZipDone" xml:space="preserve">
+    <value>已從 ZIP 更新 Patch/Server。</value>
+  </data>
+  <data name="UiUpdateFromZipFailedFormat" xml:space="preserve">
+    <value>ZIP 更新失敗：{0}</value>
+  </data>
 </root>
